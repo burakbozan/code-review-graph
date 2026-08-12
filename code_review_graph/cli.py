@@ -14,6 +14,7 @@ Usage:
     code-review-graph visualize
     code-review-graph wiki
     code-review-graph detect-changes [--base BASE] [--brief]
+    code-review-graph review-changes [--base BASE] [--format FORMAT]
     code-review-graph register <path> [--alias name]
     code-review-graph unregister <path_or_alias>
     code-review-graph repos
@@ -128,6 +129,7 @@ def _print_banner() -> None:
     {g}visualize{r}   Generate interactive HTML graph
     {g}wiki{r}        Generate markdown wiki from communities
     {g}detect-changes{r} Analyze change impact {d}(risk-scored review){r}
+    {g}review-changes{r} Structured code review {d}(risk-aware, grouped){r}
     {g}register{r}    Register a repository in the multi-repo registry
     {g}unregister{r}  Remove a repository from the registry
     {g}repos{r}       List registered repositories
@@ -1008,6 +1010,20 @@ def main() -> None:
              "second row to the panel with the real token counts. Requires "
              "`pip install tiktoken`.",
     )
+
+    # review-changes
+    review_cmd = sub.add_parser(
+        "review-changes",
+        help="Perform structured code review using change detection and impact analysis",
+    )
+    review_cmd.add_argument("--base", default="HEAD~1", help="Git diff base (default: HEAD~1)")
+    review_cmd.add_argument(
+        "--format",
+        choices=["json", "text"],
+        default="text",
+        help="Output format (default: text)",
+    )
+    review_cmd.add_argument("--repo", default=None, help="Repository root (auto-detected)")
 
     # enrich (Claude Code PreToolUse hook; reads one JSON object from stdin)
     sub.add_parser("enrich", help="Enrich hook input with graph context")
@@ -2024,5 +2040,119 @@ def main() -> None:
                 else:
                     print(json.dumps(result, indent=2, default=str))
 
+        elif args.command == "review-changes":
+            from .changes import analyze_changes
+            from .incremental import get_changed_files, get_staged_and_unstaged
+
+            base = args.base
+            changed = get_changed_files(repo_root, base)
+            if not changed:
+                changed = get_staged_and_unstaged(repo_root)
+
+            if not changed:
+                output = {"status": "no_changes", "message": "No changes detected."}
+            else:
+                result = analyze_changes(
+                    store,
+                    changed,
+                    repo_root=str(repo_root),
+                    base=base,
+                    include_churn=False,
+                )
+
+                # Organize results by risk level
+                high_risk = []
+                medium_risk = []
+                low_risk = []
+
+                for func in result.get("changed_functions", []):
+                    risk_score = func.get("risk_score", 0.0)
+                    if risk_score >= 0.7:
+                        high_risk.append(func)
+                    elif risk_score >= 0.4:
+                        medium_risk.append(func)
+                    else:
+                        low_risk.append(func)
+
+                # Determine overall risk level
+                overall_risk = result.get("risk_score", 0.0)
+                if overall_risk >= 0.7:
+                    risk_level = "high"
+                elif overall_risk >= 0.4:
+                    risk_level = "medium"
+                else:
+                    risk_level = "low"
+
+                output = {
+                    "status": "success",
+                    "summary": result.get("summary", ""),
+                    "risk_level": risk_level,
+                    "overall_risk_score": overall_risk,
+                    "total_changes": len(changed),
+                    "high_risk": high_risk,
+                    "medium_risk": medium_risk,
+                    "low_risk": low_risk,
+                    "affected_flows": result.get("affected_flows", []),
+                    "test_gaps": result.get("test_gaps", []),
+                    "review_priorities": result.get("review_priorities", []),
+                }
+
+            if args.format == "json":
+                print(json.dumps(output, indent=2, default=str))
+            else:
+                # Text output
+                if output.get("status") == "no_changes":
+                    print(output["message"])
+                else:
+                    print("# Code Review Summary")
+                    print(f"\n{output.get('summary', 'N/A')}")
+                    print(f"\nOverall Risk Score: {output.get('overall_risk_score', 0):.2f}")
+                    print(f"Risk Level: {output.get('risk_level', 'unknown').upper()}")
+
+                    affected = output.get("affected_flows", [])
+                    if affected:
+                        print(f"Affected Flows: {len(affected)}")
+
+                    if output.get("high_risk"):
+                        print(f"\n## HIGH-RISK CHANGES ({len(output['high_risk'])})")
+                        for item in output["high_risk"]:
+                            name = item.get("name", "unknown")
+                            risk = item.get("risk_score", 0)
+                            file_path = item.get("file", "unknown")
+                            line_range = f"{item.get('line_start', 0)}-{item.get('line_end', 0)}"
+                            print(f"  [!] {name} [{risk:.2f}]")
+                            print(f"      {file_path}:{line_range}")
+
+                    if output.get("medium_risk"):
+                        print(f"\n## MEDIUM-RISK CHANGES ({len(output['medium_risk'])})")
+                        for item in output["medium_risk"]:
+                            name = item.get("name", "unknown")
+                            risk = item.get("risk_score", 0)
+                            print(f"  [*] {name} [{risk:.2f}]")
+
+                    if output.get("low_risk"):
+                        print(f"\n## LOW-RISK CHANGES ({len(output['low_risk'])})")
+                        for item in output["low_risk"]:
+                            name = item.get("name", "unknown")
+                            print(f"  [-] {name}")
+
+                    if output.get("test_gaps"):
+                        print(f"\n## TEST COVERAGE GAPS ({len(output['test_gaps'])})")
+                        for gap in output["test_gaps"]:
+                            name = gap.get("name", "unknown")
+                            file_path = gap.get("file", "unknown")
+                            line_range = f"{gap.get('line_start', 0)}-{gap.get('line_end', 0)}"
+                            print(f"  [X] {name}")
+                            print(f"      {file_path}:{line_range}")
+
+                    priorities = output.get("review_priorities", [])
+                    if priorities:
+                        print(f"\n## REVIEW PRIORITIES (Top {min(5, len(priorities))})")
+                        for i, item in enumerate(priorities[:5], 1):
+                            name = item.get("name", "unknown")
+                            risk = item.get("risk_score", 0)
+                            print(f"  {i}. {name} [{risk:.2f}]")
+
     finally:
         store.close()
+

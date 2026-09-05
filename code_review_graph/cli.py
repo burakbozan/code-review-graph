@@ -2044,10 +2044,12 @@ def main() -> None:
             from .changes import analyze_changes
             from .incremental import get_changed_files, get_staged_and_unstaged
 
+            # Use explicit repo if provided, otherwise use auto-detected repo_root
+            target_repo = Path(args.repo) if args.repo else repo_root
             base = args.base
-            changed = get_changed_files(repo_root, base)
+            changed = get_changed_files(target_repo, base)
             if not changed:
-                changed = get_staged_and_unstaged(repo_root)
+                changed = get_staged_and_unstaged(target_repo)
 
             if not changed:
                 output = {"status": "no_changes", "message": "No changes detected."}
@@ -2055,7 +2057,7 @@ def main() -> None:
                 result = analyze_changes(
                     store,
                     changed,
-                    repo_root=str(repo_root),
+                    repo_root=str(target_repo),
                     base=base,
                     include_churn=False,
                 )

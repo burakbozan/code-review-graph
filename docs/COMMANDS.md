@@ -332,6 +332,9 @@ code-review-graph detect-changes --base HEAD~3 # Custom base ref
 code-review-graph detect-changes --brief       # Compact panel with token-savings estimate
 code-review-graph detect-changes --brief --verify  # ...and cross-check vs tiktoken
 code-review-graph detect-changes --churn       # Add opt-in change-frequency risk
+code-review-graph review-changes               # Structured code review (grouped by risk)
+code-review-graph review-changes --base HEAD~3 # Custom base ref
+code-review-graph review-changes --format json # JSON output (default: text)
 
 # detect-changes vs update --brief — which one?
 # • detect-changes --brief: read-only. Asks "what's the impact of my current
@@ -341,6 +344,11 @@ code-review-graph detect-changes --churn       # Add opt-in change-frequency ris
 #   runs the same analysis at the end. Use this after a rebase, a big
 #   change set, or whenever you suspect the graph is stale.
 # Both end with an identical "Token Savings" panel.
+
+# review-changes vs detect-changes — which one?
+# • detect-changes: low-level risk analysis. Machine-readable output, minimal context.
+# • review-changes: structured review. High-risk changes grouped and prioritized,
+#   includes test gaps and review priorities. Human-readable text output, or JSON.
 
 # Wiki
 code-review-graph wiki                         # Generate markdown wiki from communities
